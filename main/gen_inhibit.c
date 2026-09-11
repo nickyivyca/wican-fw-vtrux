@@ -23,6 +23,30 @@ static const char *TAG = "gen_inhibit";
 #define GEN_INHIBIT_STACK       (1024 * 4)
 
 /*
+ * Auto-arm on boot (build-time).
+ *
+ *   GEN_INHIBIT_OFF     boot idle; arm manually via POST /gen_inhibit_set.
+ *                       THE DEFAULT -- used for bench and truck bring-up, so the
+ *                       device transmits nothing until a human arms it.
+ *   GEN_INHIBIT_INHIBIT arm INHIBIT as soon as the worker starts: relay power ->
+ *                       boot -> inhibiting, no human in the loop. The deployed
+ *                       configuration. The Via harness powers the dongle at
+ *                       truck-wake, well before any crank, so this arms in time.
+ *   GEN_INHIBIT_OBSERVE / _RESPOND also valid (measurement builds).
+ *
+ * Safe at any setting: reactive trail transmits only in response to a received
+ * 0x051, so an armed-but-idle bus produces no traffic. Override at build time
+ * with -DGEN_INHIBIT_AUTOARM_MODE=... via target_compile_definitions (a plain
+ * idf.py -D sets a CMake cache var, not a macro).
+ */
+#ifndef GEN_INHIBIT_AUTOARM_MODE
+#define GEN_INHIBIT_AUTOARM_MODE        GEN_INHIBIT_OFF
+#endif
+#ifndef GEN_INHIBIT_AUTOARM_OFFSET_US
+#define GEN_INHIBIT_AUTOARM_OFFSET_US   500
+#endif
+
+/*
  * Latency histogram, microseconds. Boundaries are chosen around the decision
  * we actually face: under ~200 us a plain high-priority task is enough and the
  * IRAM-resident design is unnecessary complexity; past ~1 ms we are eating the
@@ -488,4 +512,10 @@ void gen_inhibit_init(void)
     gen_inhibit_reset_stats();
     xTaskCreate(gen_inhibit_task, "gen_inhibit", GEN_INHIBIT_STACK, NULL,
                 GEN_INHIBIT_TASK_PRIO, NULL);
+
+    if (GEN_INHIBIT_AUTOARM_MODE != GEN_INHIBIT_OFF)
+    {
+        ESP_LOGW(TAG, "auto-arm on boot: mode %d", (int)GEN_INHIBIT_AUTOARM_MODE);
+        gen_inhibit_set_mode(GEN_INHIBIT_AUTOARM_MODE, GEN_INHIBIT_AUTOARM_OFFSET_US);
+    }
 }
