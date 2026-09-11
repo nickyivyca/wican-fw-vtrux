@@ -67,6 +67,8 @@
 #include "wifi_network.h"
 #include "esp_vfs.h"
 #include "esp_ota_ops.h"
+#include "ota_health.h"
+#include "gen_inhibit.h"
 #include "can.h"
 #include "ble.h"
 #include "sleep_mode.h"
@@ -117,6 +119,8 @@ TimerHandle_t xrestartTimer;
 #define FILE_PATH_MAX (ESP_VFS_PATH_MAX + CONFIG_SPIFFS_OBJ_NAME_LEN)
 /* Scratch buffer size */
 #define SCRATCH_BUFSIZE  4096
+/* Bounded retry so a vanished client cannot pin the httpd worker. */
+#define OTA_RECV_MAX_TIMEOUTS  20
 
 #define MAX_FILE_SIZE   (2000*1024) // 200 KB
 #define MAX_FILE_SIZE_STR "200KB"
@@ -1000,6 +1004,25 @@ static esp_err_t upload_post_handler(httpd_req_t *req)
     char filepath[FILE_PATH_MAX];
     uint32_t total_size = 0;
 
+    /*
+     * Refuse an OTA while gen_inhibit holds the bus.
+     *
+     * Two reasons, both real. Safety: this device exists to transmit onto a
+     * live powertrain bus, and reflashing underneath an armed transmitter is
+     * never what anyone wants. Correctness: can_disable() below calls
+     * twai_driver_uninstall(), and doing that while the gen_inhibit worker is
+     * parked inside twai_receive() tears the driver out from under a blocked
+     * call. Disarm first -- POST /gen_inhibit_set?mode=0.
+     */
+    if(gen_inhibit_owns_bus())
+    {
+        ESP_LOGE(TAG, "OTA refused: gen_inhibit is armed");
+        /* IDF's httpd_err_code_t has no 409, so 403 carries the refusal. */
+        httpd_resp_send_err(req, HTTPD_403_FORBIDDEN,
+                            "gen_inhibit is armed; POST /gen_inhibit_set?mode=0 first");
+        return ESP_FAIL;
+    }
+
     if(config_server_get_ble_config())
     {
     	ble_disable();
@@ -1080,16 +1103,39 @@ static esp_err_t upload_post_handler(httpd_req_t *req)
 	char *boundary_start = 0;
 	char *boundary_end = 0;
 	uint8_t count = 0;
+	char *scratch = buf;      /* fixed recv target; `buf` is the write offset */
+	int timeouts = 0;
 
     while (remaining > 0)
     {
 //        ESP_LOGI(TAG, "Remaining size : %d", remaining);
         /* Receive the file part by part into a buffer */
-        if ((received = httpd_req_recv(req, buf, MIN(remaining, SCRATCH_BUFSIZE))) <= 0)
+        /*
+         * BUGFIX: read into the START of scratch every time. The original code
+         * advanced `buf` past the multipart preamble on the first chunk and
+         * never restored it, so every later recv wrote up to SCRATCH_BUFSIZE
+         * bytes at scratch+~160 -- i.e. ~160 bytes past the end of a 4096-byte
+         * buffer that is the last member of a file-scope static. Whether that
+         * mattered depended on .bss layout, which is why stock survived it and
+         * a build with extra statics did not.
+         */
+        if ((received = httpd_req_recv(req, scratch, MIN(remaining, SCRATCH_BUFSIZE))) <= 0)
         {
             if (received == HTTPD_SOCK_ERR_TIMEOUT)
             {
-                /* Retry if timeout occurred */
+                /*
+                 * BUGFIX: the original retried forever, so a client that
+                 * vanished mid-upload pinned the single httpd worker
+                 * permanently -- the web UI, and therefore the only recovery
+                 * channel on a WiCAN OBD, stayed dead until a power cycle.
+                 */
+                if (++timeouts > OTA_RECV_MAX_TIMEOUTS)
+                {
+                    ESP_LOGE(TAG, "OTA aborted: %d consecutive recv timeouts", timeouts);
+                    esp_ota_abort(update_handle);
+                    httpd_resp_send_err(req, HTTPD_408_REQ_TIMEOUT, "upload stalled");
+                    return ESP_FAIL;
+                }
                 continue;
             }
 
@@ -1099,6 +1145,24 @@ static esp_err_t upload_post_handler(httpd_req_t *req)
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to receive file");
             return ESP_FAIL;
         }
+
+        timeouts = 0;
+
+        /*
+         * BUGFIX (second half): reset the WRITE pointer too, every iteration.
+         *
+         * Pinning the recv target to `scratch` stopped the overflow, but left
+         * `buf` parked at scratch+preamble from the first chunk. Every later
+         * chunk then wrote starting at scratch+preamble while claiming
+         * `received` bytes -- dropping the first ~160 bytes of each chunk and
+         * reading the same distance past the valid data. The upload ran to
+         * completion and esp_ota_end() rejected the result, which is the good
+         * outcome: a corrupt image refused rather than booted.
+         *
+         * Only the first chunk carries a preamble, so only the first chunk
+         * moves `buf` off `scratch`.
+         */
+        buf = scratch;
 
         if(boundary_start == 0)
         {
@@ -1147,7 +1211,12 @@ static esp_err_t upload_post_handler(httpd_req_t *req)
     /* Close file upon upload completion */
     ESP_LOGI(TAG, "File reception complete: %lu", total_size);
 
-    if ((received = httpd_req_recv(req, buf, SCRATCH_BUFSIZE)) <= 0)
+    /*
+     * Drains the trailing multipart boundary. Read into `scratch`, not `buf`:
+     * `buf` may still sit preamble-bytes into the buffer, and asking for a
+     * full SCRATCH_BUFSIZE there is the original overflow all over again.
+     */
+    if ((received = httpd_req_recv(req, scratch, SCRATCH_BUFSIZE)) <= 0)
     {
         ESP_LOGE(TAG, "File reception failed!");
         esp_ota_abort(update_handle);
@@ -1469,6 +1538,71 @@ static const httpd_uri_t ws = {
 };
 static struct file_server_data server_data = {.base_path = FS_MOUNT_POINT""};
 //static struct file_server_data *server_data = NULL;
+
+/* ---- gen_inhibit bench control -------------------------------------------
+ * GET  /gen_inhibit                       -> timing statistics as JSON
+ * POST /gen_inhibit_set?mode=N&offset=N   -> 0 off, 1 observe, 2 respond
+ *
+ * The setter is POST so that a browser prefetch or a stray GET cannot start
+ * the device transmitting. RESPOND emits only GEN_INHIBIT_PROBE_ID (0x7F0),
+ * never 0x051 -- see gen_inhibit.h.
+ */
+static esp_err_t gen_inhibit_get_handler(httpd_req_t *req)
+{
+    static char out[1400];
+    int n = gen_inhibit_get_stats_json(out, sizeof(out));
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, out, n);
+    return ESP_OK;
+}
+
+static esp_err_t gen_inhibit_set_handler(httpd_req_t *req)
+{
+    char query[128];
+    char val[16];
+    int mode = -1;
+    uint32_t offset_us = 500;
+
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK)
+    {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "expected ?mode=0|1|2[&offset=us]");
+        return ESP_FAIL;
+    }
+    if (httpd_query_key_value(query, "mode", val, sizeof(val)) == ESP_OK)
+    {
+        mode = atoi(val);
+    }
+    if (httpd_query_key_value(query, "offset", val, sizeof(val)) == ESP_OK)
+    {
+        offset_us = (uint32_t)atoi(val);
+    }
+    if (mode < 0 || mode > 3)
+    {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "mode must be 0..3 (3=INHIBIT)");
+        return ESP_FAIL;
+    }
+    if (gen_inhibit_set_mode((gen_inhibit_mode_t)mode, offset_us) != ESP_OK)
+    {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad offset (max 4000 us)");
+        return ESP_FAIL;
+    }
+
+    static char out[1400];
+    int n = gen_inhibit_get_stats_json(out, sizeof(out));
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, out, n);
+    return ESP_OK;
+}
+
+static const httpd_uri_t gen_inhibit_uri = {
+    .uri = "/gen_inhibit", .method = HTTP_GET,
+    .handler = gen_inhibit_get_handler, .user_ctx = NULL
+};
+static const httpd_uri_t gen_inhibit_set_uri = {
+    .uri = "/gen_inhibit_set", .method = HTTP_POST,
+    .handler = gen_inhibit_set_handler, .user_ctx = NULL
+};
+
 /* URI handler for uploading files to server */
 static const httpd_uri_t file_upload = {
     .uri       = "/upload/ota.bin",   // Match all URIs of type /upload/path/to/file
@@ -2205,7 +2339,7 @@ static httpd_handle_t config_server_init(void)
                        );
 
     // Start the httpd server
-	config.max_uri_handlers = 18;
+	config.max_uri_handlers = 21;
 	config.stack_size = 5120;
     ESP_LOGI(TAG, "Starting server on port: '%d'", config.server_port);
     if (httpd_start(&server, &config) == ESP_OK)
@@ -2219,6 +2353,10 @@ static httpd_handle_t config_server_init(void)
         httpd_register_uri_handler(server, &logo_uri);
         httpd_register_uri_handler(server, &ws);
         httpd_register_uri_handler(server, &file_upload);
+        /* OTA endpoint is live -- the channel we would recover through. */
+        httpd_register_uri_handler(server, &gen_inhibit_uri);
+        httpd_register_uri_handler(server, &gen_inhibit_set_uri);
+        ota_health_report(OTA_HEALTH_HTTPD);
 		httpd_register_uri_handler(server, &system_reboot);
 		httpd_register_uri_handler(server, &store_canflt_uri);
 		httpd_register_uri_handler(server, &load_canflt_uri);
@@ -2254,6 +2392,10 @@ void config_server_restart(void)
         httpd_register_uri_handler(server, &logo_uri);
         httpd_register_uri_handler(server, &ws);
         httpd_register_uri_handler(server, &file_upload);
+        /* OTA endpoint is live -- the channel we would recover through. */
+        httpd_register_uri_handler(server, &gen_inhibit_uri);
+        httpd_register_uri_handler(server, &gen_inhibit_set_uri);
+        ota_health_report(OTA_HEALTH_HTTPD);
 		httpd_register_uri_handler(server, &system_reboot);
 		httpd_register_uri_handler(server, &store_canflt_uri);
 		httpd_register_uri_handler(server, &load_canflt_uri);

@@ -56,6 +56,8 @@
 #include "wc_mdns.h"
 #include "hw_config.h"
 #include "dev_status.h"
+#include "ota_health.h"
+#include "gen_inhibit.h"
 #include "debug_logs.h"
 #include "debug_logs_config.h"
 
@@ -274,6 +276,12 @@ static void can_rx_task(void *pvParameters)
 		
 		dev_status_wait_for_bits(DEV_AWAKE_BIT, portMAX_DELAY);
 
+        if(gen_inhibit_owns_bus())
+        {
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
+        }
+
         while(can_receive(&rx_msg, 0) ==  ESP_OK)
         {
 //        	num_msg++;
@@ -369,6 +377,7 @@ void app_main(void)
 {
 	dev_status_init();
 	dev_status_set_bits(DEV_AWAKE_BIT);
+	ota_health_init();
     ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
@@ -398,7 +407,8 @@ void app_main(void)
     xMsg_Tx_Queue = xQueueCreate(16, sizeof( xdev_buffer) );
     xmsg_ws_tx_queue = xQueueCreate(8, sizeof( xdev_buffer) );
 
-	esp_ota_mark_app_valid_cancel_rollback();
+	/* Moved: the image is now marked valid only once the recovery channel
+	 * is proven up. See ota_health.c. */
 //    xmsg_obd_rx_queue = xQueueCreate(100, sizeof( twai_message_t) );
 
     ESP_ERROR_CHECK(esp_read_mac(derived_mac_addr, ESP_MAC_WIFI_SOFTAP));
@@ -414,6 +424,8 @@ void app_main(void)
 
 	int8_t can_datarate = config_server_get_can_rate();
 	(can_datarate != -1) ? can_init(can_datarate):can_init(CAN_500K);
+	ota_health_report(OTA_HEALTH_CAN);
+	gen_inhibit_init();
 
 	if(can_datarate != -1)
 	{

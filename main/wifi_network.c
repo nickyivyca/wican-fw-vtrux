@@ -34,6 +34,7 @@
  #include "config_server.h"
  #include "ble.h"
  #include "dev_status.h"
+ #include "ota_health.h"
  
  #define WIFI_CONNECTED_BIT 			BIT0
  #define WIFI_FAIL_BIT     			BIT1
@@ -156,6 +157,7 @@
      else if(event_id == WIFI_EVENT_AP_START)
      {
          ESP_LOGI(WIFI_TAG, "WIFI_EVENT_AP_START");
+         ota_health_report(OTA_HEALTH_WIFI_AP);
      }
  }
  

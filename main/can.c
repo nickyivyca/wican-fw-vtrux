@@ -34,6 +34,7 @@
 #include "driver/twai.h"
 #include "can.h"
 #include "hw_config.h"
+#include "gen_inhibit.h"
 
 static EventGroupHandle_t s_can_event_group = NULL;
 #define CAN_ENABLE_BIT 		BIT0
@@ -151,7 +152,16 @@ void can_disable(void)
 	{
 		return;
 	}
-	else if(can_cfg.bus_state == ON_BUS)
+
+	/*
+	 * If gen_inhibit is armed, its worker is blocked in twai_receive(); the
+	 * twai_driver_uninstall() below would free the driver under it. Force the
+	 * worker out and keep it out first. No-op if gen_inhibit is idle, if this
+	 * IS the worker (its own release path), or if the worker never started.
+	 */
+	gen_inhibit_quiesce();
+
+	if(can_cfg.bus_state == ON_BUS)
 	{
 		gpio_set_level(CAN_STDBY_GPIO_NUM, 1);
 		can_block();
