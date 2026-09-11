@@ -47,6 +47,32 @@ static const char *TAG = "gen_inhibit";
 #endif
 
 /*
+ * Conditions that DISABLE the inhibit, latched until reboot. Both mean the
+ * engine/generator is legitimately wanted, so we stop transmitting and stay
+ * stopped (power-cycle -- the relay drops at truck sleep -- to re-enable).
+ *
+ *   M mode  -- driver manually commanding the engine (0x639 shift_lever_pos==4,
+ *              "Manual_generator_mode", confirmed in the powertrain DBC). Both
+ *              0x639 and 0x051 are on the PT bus, so the worker sees it inline.
+ *   Low SoC -- pack needs the generator to charge. 0x411 BMS_SoC_HiRes, a 14-bit
+ *              big-endian value at bit 7, scale 0.01%: raw=(B0<<6)|(B1>>2),
+ *              percent = raw/100.
+ *
+ * Sentinel resilience: 0x411 reads 0 for the first samples at startup before it
+ * is valid. A raw 0 is treated as "not yet valid", never as 0%, and the
+ * sub-threshold condition must persist GEN_INHIBIT_SOC_DEBOUNCE valid samples
+ * before it latches -- so a transient 0->real-value at boot cannot false-trip.
+ */
+#define GEN_INHIBIT_MMODE_ID        0x639
+#define GEN_INHIBIT_MMODE_VALUE     4
+#define GEN_INHIBIT_SOC_ID          0x411
+#ifndef GEN_INHIBIT_SOC_MIN_PCT
+#define GEN_INHIBIT_SOC_MIN_PCT     20
+#endif
+#define GEN_INHIBIT_SOC_MIN_RAW     (GEN_INHIBIT_SOC_MIN_PCT * 100)
+#define GEN_INHIBIT_SOC_DEBOUNCE    5
+
+/*
  * Latency histogram, microseconds. Boundaries are chosen around the decision
  * we actually face: under ~200 us a plain high-priority task is enough and the
  * IRAM-resident design is unnecessary complexity; past ~1 ms we are eating the
@@ -86,6 +112,11 @@ static uint32_t s_rx_errors;        /* twai_receive failures that were not timeo
 static TaskHandle_t  s_worker;      /* the worker task, for self-call detection */
 static volatile bool s_quiesce;     /* an external caller needs the driver freed */
 static volatile bool s_parked;      /* worker is provably outside twai_receive() */
+
+static volatile bool s_disabled;        /* latched: inhibit off until reboot */
+static const char   *s_disable_reason = "";
+static uint32_t      s_soc_raw;         /* last valid SoC, raw (percent*100) */
+static uint32_t      s_soc_low_count;   /* consecutive valid sub-threshold samples */
 
 /*
  * A run of hard receive errors means the driver is gone underneath us -- for
@@ -356,6 +387,53 @@ static void send_inhibit(const twai_message_t *rx, int64_t t_rx)
     }
 }
 
+static void disable_monitor(const twai_message_t *rx)
+{
+    if (s_disabled)
+    {
+        return;   /* latched until reboot; nothing more to evaluate */
+    }
+
+    if (rx->identifier == GEN_INHIBIT_MMODE_ID && rx->data_length_code >= 7)
+    {
+        uint8_t pos = (rx->data[6] >> 4) & 0x07;
+        if (pos == GEN_INHIBIT_MMODE_VALUE)
+        {
+            s_disabled = true;
+            s_disable_reason = "m_mode";
+            ESP_LOGW(TAG, "INHIBIT DISABLED (latched): M mode engaged");
+        }
+    }
+    else if (rx->identifier == GEN_INHIBIT_SOC_ID && rx->data_length_code >= 2)
+    {
+        uint32_t raw = ((uint32_t)rx->data[0] << 6) | (rx->data[1] >> 2);
+        if (raw == 0)
+        {
+            /* Startup sentinel, not 0% -- treat as not-yet-valid. */
+            s_soc_low_count = 0;
+        }
+        else
+        {
+            s_soc_raw = raw;
+            if (raw < GEN_INHIBIT_SOC_MIN_RAW)
+            {
+                if (++s_soc_low_count >= GEN_INHIBIT_SOC_DEBOUNCE)
+                {
+                    s_disabled = true;
+                    s_disable_reason = "low_soc";
+                    ESP_LOGW(TAG, "INHIBIT DISABLED (latched): SoC %lu.%02lu%% below %d%%",
+                             (unsigned long)(raw / 100), (unsigned long)(raw % 100),
+                             GEN_INHIBIT_SOC_MIN_PCT);
+                }
+            }
+            else
+            {
+                s_soc_low_count = 0;
+            }
+        }
+    }
+}
+
 static void gen_inhibit_task(void *arg)
 {
     static int64_t t_prev_051 = 0;
@@ -439,6 +517,9 @@ static void gen_inhibit_task(void *arg)
 
         int64_t t_rx = esp_timer_get_time();
 
+        /* Watch for M mode / low SoC on every frame -- latches the disable. */
+        disable_monitor(&rx);
+
         if (rx.identifier != GEN_INHIBIT_VCM_ID)
         {
             s_other_frames++;
@@ -472,7 +553,7 @@ static void gen_inhibit_task(void *arg)
         {
             send_probe(t_rx);
         }
-        else if (s_mode == GEN_INHIBIT_INHIBIT)
+        else if (s_mode == GEN_INHIBIT_INHIBIT && !s_disabled)
         {
             send_inhibit(&rx, t_rx);
         }
@@ -485,14 +566,17 @@ int gen_inhibit_get_stats_json(char *buf, int buflen)
                      "{\"mode\":%d,\"offset_us\":%lu,\"probe_id\":\"0x%03X\","
                      "\"tx_ok\":%lu,\"tx_fail\":%lu,\"other_frames\":%lu,"
                      "\"ctr_ok\":%lu,\"ctr_bad\":%lu,"
-                     "\"bus_on\":%s,\"bus_ours\":%s,\"rx_errors\":%lu,",
+                     "\"bus_on\":%s,\"bus_ours\":%s,\"rx_errors\":%lu,"
+                     "\"disabled\":%s,\"disable_reason\":\"%s\",\"soc_x100\":%lu,",
                      (int)s_mode, (unsigned long)s_offset_us, GEN_INHIBIT_PROBE_ID,
                      (unsigned long)s_tx_ok, (unsigned long)s_tx_fail,
                      (unsigned long)s_other_frames,
                      (unsigned long)s_ctr_steps_ok, (unsigned long)s_ctr_steps_bad,
                      can_is_enabled() ? "true" : "false",
                      s_we_enabled_bus ? "true" : "false",
-                     (unsigned long)s_rx_errors);
+                     (unsigned long)s_rx_errors,
+                     s_disabled ? "true" : "false", s_disable_reason,
+                     (unsigned long)s_soc_raw);
 
     n += hist_json(&s_rx_gap, "rx_gap", buf + n, buflen - n);
     if (n < buflen) n += snprintf(buf + n, buflen - n, ",");
