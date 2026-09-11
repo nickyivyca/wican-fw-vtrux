@@ -375,130 +375,13 @@ static void adc_task(void *pvParameters)
     	}
 
     	xQueueOverwrite( voltage_queue, &battery_voltage );
-    	if(enable_sleep == 1)
-    	{
-			switch(sleep_state)
-			{
-				case RUN_STATE:
-				{
-					if(battery_voltage < sleep_voltage)
-					{
-						ESP_LOGI(TAG, "low voltage: %f", battery_voltage);
-						sleep_detect_time = esp_timer_get_time();
-						sleep_state++;
-					}
-					break;
-				}
-				case SLEEP_DETECTED:
-				{
-					if(battery_voltage > sleep_voltage)
-					{
-						ESP_LOGI(TAG, "high voltage: %f", battery_voltage);
-						sleep_state = RUN_STATE;
-					}
-
-					if((esp_timer_get_time() - sleep_detect_time) > sleep_time)
-					{
-						sleep_state = SLEEP_STATE;
-	//    	    		wifi_network_deinit();
-	//    	    		ble_disable();
-					}
-
-					break;
-				}
-				case SLEEP_STATE:
-				{
-					ESP_LOGI(TAG, "Go to sleep");
-					if(battery_voltage > sleep_voltage)
-					{
-						wakeup_detect_time = esp_timer_get_time();
-						ESP_LOGI(TAG, "wake up, voltage: %f", battery_voltage);
-						sleep_state = WAKEUP_STATE;
-					}
-
-					if(config_server_get_battery_alert_config())
-					{
-						if(battery_voltage < alert_voltage)
-						{
-							ESP_LOGW(TAG, "battery alert!");
-							if(((esp_timer_get_time() - pub_time) > alert_time) || (pub_time == 0))
-							{
-								pub_time = esp_timer_get_time();
-								wifi_network_init(config_server_get_alert_ssid(), config_server_get_alert_pass());
-								vTaskDelay(1000 / portTICK_PERIOD_MS);
-								uint8_t count = 0;
-								while(!wifi_network_is_connected())
-								{
-									vTaskDelay(1000 / portTICK_PERIOD_MS);
-									if(count++ > 10)
-									{
-										break;
-									}
-								}
-								if(wifi_network_is_connected())
-								{
-									ESP_LOGI(TAG, " wifi connectred try to publish");
-									mqtt_init();
-									EventBits_t bits = xEventGroupWaitBits(s_mqtt_event_group,
-																			PUB_SUCCESS_BIT,
-																			pdFALSE,
-																			pdFALSE,
-																			pdMS_TO_TICKS(10000));
-									if (bits & PUB_SUCCESS_BIT)
-									{
-										ESP_LOGI(TAG, "publish ok");
-										xEventGroupClearBits(s_mqtt_event_group, PUB_SUCCESS_BIT);
-									}
-									else
-									{
-										ESP_LOGE(TAG, "publish error");
-									}
-									esp_mqtt_client_disconnect(client);
-									vTaskDelay(1000 / portTICK_PERIOD_MS);
-									wifi_network_deinit();
-								}
-							}
-						}
-					}
-					break;
-				}
-				case WAKEUP_STATE:
-				{
-					if(battery_voltage > sleep_voltage)
-					{
-						if((esp_timer_get_time() - wakeup_detect_time) > WAKEUP_TIME_DELAY)
-						{
-							ESP_LOGI(TAG, "Wake up now...");
-							esp_restart();
-
-						}
-					}
-					else if(battery_voltage < sleep_voltage)
-					{
-                        dev_status_clear_bits(DEV_AWAKE_BIT);
-                        dev_status_set_bits(DEV_SLEEP_BIT);
-						sleep_state = SLEEP_STATE;
-					}
-					break;
-				}
-			}
-
-	//    	ESP_LOGI(TAG, "value: %u",adc_val);
-			if(sleep_state == SLEEP_STATE)
-			{
-				ESP_LOGW(TAG, "sleeping");
-				can_disable();
-				wifi_network_deinit();
-				ble_disable();
-				esp_sleep_enable_timer_wakeup(2*1000000);
-				esp_light_sleep_start();;
-			}
-			else vTaskDelay(pdMS_TO_TICKS(1000));
-    	}
-    	else
-    	{
-    		vTaskDelay(pdMS_TO_TICKS(1000));
-    	}
+    	vTaskDelay(pdMS_TO_TICKS(1000));
+    	/* sleep + battery-alert removed 2026-09-10: this dongle is
+    	 * powered off the relay-switched outputs that ran the old BT
+    	 * dongles, so it only has power when it should be running. The
+    	 * sleep state machine also called can_disable() from this task,
+    	 * an uncoordinated teardown of the bus under gen_inhibit. The
+    	 * task now only samples battery voltage for /check_status. */
     }
 }
 
