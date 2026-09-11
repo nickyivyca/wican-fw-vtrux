@@ -36,7 +36,6 @@
 #include "ver.h"
 #include "types.h"
 #include "config_server.h"
-#include "realdash.h"
 #include "slcan.h"
 #include "can.h"
 #include "ble.h"
@@ -45,13 +44,11 @@
 #include "esp_ota_ops.h"
 #include "nvs.h"
 #include "nvs_flash.h"
-#include "gvret.h"
 #include "sleep_mode.h"
 #include "wc_uart.h"
 #include "elm327.h"
 #include "mqtt.h"
 #include "esp_mac.h"
-#include "ftp.h"
 #include "autopid.h"
 #include "wc_mdns.h"
 #include "hw_config.h"
@@ -208,22 +205,6 @@ static void can_tx_task(void *pvParameters)
 				}
 			}
 		}
-		else if(protocol == REALDASH)
-		{
-			ESP_LOG_BUFFER_HEX(TAG, ucTCP_RX_Buffer.ucElement, ucTCP_RX_Buffer.usLen);
-
-			if(real_dash_parse_66(&tx_msg, ucTCP_RX_Buffer.ucElement) == 0)
-			{
-				real_dash_parse_44(&tx_msg, ucTCP_RX_Buffer.ucElement, ucTCP_RX_Buffer.usLen);
-			}
-
-			tx_msg.self = 0;
-			can_send(&tx_msg, portMAX_DELAY);
-		}
-		else if(protocol == SAVVYCAN)
-		{
-			gvret_parse(msg_ptr, temp_len, &tx_msg, &xMsg_Tx_Queue);
-		}
 		else if(protocol == OBD_ELM327)
 		{
 			if(ucTCP_RX_Buffer.dev_channel == DEV_WIFI)
@@ -305,14 +286,6 @@ static void can_rx_task(void *pvParameters)
 				if(protocol == SLCAN)
 				{
 					ucTCP_TX_Buffer.usLen = slcan_parse_frame(ucTCP_TX_Buffer.ucElement, &rx_msg);
-				}
-				else if(protocol == REALDASH)
-				{
-					ucTCP_TX_Buffer.usLen = real_dash_set_66(&rx_msg, ucTCP_TX_Buffer.ucElement);
-				}
-				else if(protocol == SAVVYCAN)
-				{
-					ucTCP_TX_Buffer.usLen = gvret_parse_can_frame(ucTCP_TX_Buffer.ucElement, &rx_msg);
 				}
 				else if(protocol == OBD_ELM327 || protocol == AUTO_PID)
 				{
@@ -462,11 +435,6 @@ void app_main(void)
 			can_set_bitrate(CAN_500K);
 		}
 
-		can_enable();
-	}
-	else if(protocol == SAVVYCAN)
-	{
-		gvret_init(&send_to_host);
 		can_enable();
 	}
 	else if(protocol == OBD_ELM327)
@@ -621,7 +589,6 @@ void app_main(void)
     
 
 	// xEventTask = xEventGroupCreate();
-	// xTaskCreate(ftp_task, "FTP", 1024*6, NULL, 2, NULL);
 	// xEventGroupWaitBits( xEventTask,
 	// FTP_TASK_FINISH_BIT, /* The bits within the event group to wait for. */
 	// pdTRUE, /* BIT_0 should be cleared before returning. */
