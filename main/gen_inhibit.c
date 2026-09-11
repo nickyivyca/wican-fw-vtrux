@@ -73,6 +73,26 @@ static const char *TAG = "gen_inhibit";
 #define GEN_INHIBIT_SOC_DEBOUNCE    5
 
 /*
+ * Self-telemetry frames, so an Android/laptop log is self-documenting: which
+ * build ran, what mode, whether/why disabled, how much it transmitted. Layout
+ * and versions: notes/artifacts/gen-inhibit/wican_diag_schema.md and
+ * projects/vtrux/vtrux-wican-diag.dbc. Three fixed IDs (no paging), round-robin
+ * at ~1 Hz each while armed. 0x7F1-0x7F3 are in the 0x7Fx range nothing on the
+ * truck consumes (same rationale as the 0x7F0 probe).
+ */
+#define GEN_INHIBIT_DIAG_ID_STATUS   0x7F1
+#define GEN_INHIBIT_DIAG_ID_COUNTERS 0x7F2
+#define GEN_INHIBIT_DIAG_ID_BUILD    0x7F3
+#define GEN_INHIBIT_DIAG_SCHEMA_VER  1
+#ifndef DIAG_FW_VERSION
+#define DIAG_FW_VERSION              1
+#endif
+#define GEN_INHIBIT_DIAG_PERIOD_MS   300
+#ifndef GIT_SHA
+#define GIT_SHA "unknown"
+#endif
+
+/*
  * Latency histogram, microseconds. Boundaries are chosen around the decision
  * we actually face: under ~200 us a plain high-priority task is enough and the
  * IRAM-resident design is unnecessary complexity; past ~1 ms we are eating the
@@ -115,8 +135,11 @@ static volatile bool s_parked;      /* worker is provably outside twai_receive()
 
 static volatile bool s_disabled;        /* latched: inhibit off until reboot */
 static const char   *s_disable_reason = "";
+static uint8_t       s_disable_code;    /* 0 none, 1 m_mode, 2 low_soc (for diag) */
 static uint32_t      s_soc_raw;         /* last valid SoC, raw (percent*100) */
 static uint32_t      s_soc_low_count;   /* consecutive valid sub-threshold samples */
+static uint8_t       s_last_shift_pos = 0xFF;  /* last 0x639 shift_lever_pos */
+static uint32_t      s_git_hash;        /* FNV-1a of GIT_SHA, computed at init */
 
 /*
  * A run of hard receive errors means the driver is gone underneath us -- for
@@ -397,10 +420,12 @@ static void disable_monitor(const twai_message_t *rx)
     if (rx->identifier == GEN_INHIBIT_MMODE_ID && rx->data_length_code >= 7)
     {
         uint8_t pos = (rx->data[6] >> 4) & 0x07;
+        s_last_shift_pos = pos;
         if (pos == GEN_INHIBIT_MMODE_VALUE)
         {
             s_disabled = true;
             s_disable_reason = "m_mode";
+            s_disable_code = 1;
             ESP_LOGW(TAG, "INHIBIT DISABLED (latched): M mode engaged");
         }
     }
@@ -421,6 +446,7 @@ static void disable_monitor(const twai_message_t *rx)
                 {
                     s_disabled = true;
                     s_disable_reason = "low_soc";
+                    s_disable_code = 2;
                     ESP_LOGW(TAG, "INHIBIT DISABLED (latched): SoC %lu.%02lu%% below %d%%",
                              (unsigned long)(raw / 100), (unsigned long)(raw % 100),
                              GEN_INHIBIT_SOC_MIN_PCT);
@@ -434,9 +460,71 @@ static void disable_monitor(const twai_message_t *rx)
     }
 }
 
+static uint32_t fnv1a32(const char *s)
+{
+    uint32_t h = 2166136261u;
+    while (*s)
+    {
+        h ^= (uint8_t)*s++;
+        h *= 16777619u;
+    }
+    return h;
+}
+
+static void send_diag(uint8_t which)
+{
+    twai_message_t tx = { 0 };
+    tx.data_length_code = 8;
+
+    if (which == 0)   /* STATUS -> 0x7F1 */
+    {
+        uint8_t flags = (s_disabled ? 0x01 : 0)
+                      | (can_is_enabled() ? 0x02 : 0)
+                      | (s_we_enabled_bus ? 0x04 : 0)
+                      | ((GEN_INHIBIT_AUTOARM_MODE != GEN_INHIBIT_OFF) ? 0x08 : 0);
+        tx.identifier = GEN_INHIBIT_DIAG_ID_STATUS;
+        tx.data[0] = GEN_INHIBIT_DIAG_SCHEMA_VER;
+        tx.data[1] = (uint8_t)DIAG_FW_VERSION;
+        tx.data[2] = (uint8_t)s_mode;
+        tx.data[3] = flags;
+        tx.data[4] = s_disable_code;
+        tx.data[5] = s_last_shift_pos;
+        tx.data[6] = (uint8_t)s_soc_raw;         /* soc_x100, LE */
+        tx.data[7] = (uint8_t)(s_soc_raw >> 8);
+    }
+    else if (which == 1)   /* COUNTERS -> 0x7F2 */
+    {
+        uint32_t v = s_tx_ok;
+        tx.identifier = GEN_INHIBIT_DIAG_ID_COUNTERS;
+        tx.data[0] = (uint8_t)v;
+        tx.data[1] = (uint8_t)(v >> 8);
+        tx.data[2] = (uint8_t)(v >> 16);
+        tx.data[3] = (uint8_t)(v >> 24);
+        tx.data[4] = s_tx_fail       > 255 ? 255 : (uint8_t)s_tx_fail;
+        tx.data[5] = s_ctr_steps_bad > 255 ? 255 : (uint8_t)s_ctr_steps_bad;
+        tx.data[6] = s_rx_errors     > 255 ? 255 : (uint8_t)s_rx_errors;
+    }
+    else   /* BUILD -> 0x7F3 */
+    {
+        uint32_t h = s_git_hash;
+        tx.identifier = GEN_INHIBIT_DIAG_ID_BUILD;
+        tx.data[0] = (uint8_t)h;
+        tx.data[1] = (uint8_t)(h >> 8);
+        tx.data[2] = (uint8_t)(h >> 16);
+        tx.data[3] = (uint8_t)(h >> 24);
+        tx.data[4] = (uint8_t)(DIAG_FW_VERSION);
+        tx.data[5] = (uint8_t)(DIAG_FW_VERSION >> 8);
+        tx.data[6] = GEN_INHIBIT_DIAG_SCHEMA_VER;
+    }
+
+    twai_transmit(&tx, 0);   /* best-effort; fails silently in listen-only */
+}
+
 static void gen_inhibit_task(void *arg)
 {
     static int64_t t_prev_051 = 0;
+    static int64_t t_last_diag = 0;
+    static uint8_t diag_page = 0;
     twai_message_t rx;
 
     s_worker = xTaskGetCurrentTaskHandle();
@@ -476,6 +564,19 @@ static void gen_inhibit_task(void *arg)
          * ISR-to-task latency rather than wican-fw's 1 ms poll interval. That
          * difference is the whole reason this component exists.
          */
+        /*
+         * Self-telemetry heartbeat, round-robin across the three diag IDs. Runs
+         * before the blocking receive so it still fires on a quiet bus (the
+         * 200 ms timeout bounds the gap). Armed only -- past the OFF branch.
+         */
+        int64_t now = esp_timer_get_time();
+        if (now - t_last_diag >= (int64_t)GEN_INHIBIT_DIAG_PERIOD_MS * 1000)
+        {
+            t_last_diag = now;
+            send_diag(diag_page);
+            diag_page = (diag_page + 1) % 3;
+        }
+
         /*
          * 200 ms rather than a full second only so a disarm is acted on
          * promptly; a timeout costs nothing but a loop iteration.
@@ -593,6 +694,7 @@ int gen_inhibit_get_stats_json(char *buf, int buflen)
 
 void gen_inhibit_init(void)
 {
+    s_git_hash = fnv1a32(GIT_SHA);
     gen_inhibit_reset_stats();
     xTaskCreate(gen_inhibit_task, "gen_inhibit", GEN_INHIBIT_STACK, NULL,
                 GEN_INHIBIT_TASK_PRIO, NULL);
