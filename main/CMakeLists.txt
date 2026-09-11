@@ -1,7 +1,7 @@
 # See the build system documentation in IDF programming guide
 # for more information about component CMakeLists.txt files.
-set(srcs "main.c" "comm_server.c" "config_server.c" "slcan.c" "can.c" "ble.c" "wifi_network.c" "wc_uart.c" "elm327.c" "mqtt.c" "sleep_mode.c" "autopid.c" "expression_parser.c" "wc_mdns.c" "wc_timer.c" "dev_status.c" "ota_health.c" "gen_inhibit.c")
-set(requires   esp_timer esp_wifi nvs_flash fatfs vfs driver esp-tls esp_adc esp_eth log app_update esp_http_server bt spiffs freertos mqtt json debug_logs)
+set(srcs "main.c" "comm_server.c" "config_server.c" "slcan.c" "can.c" "wifi_network.c" "wc_uart.c" "elm327.c" "mqtt.c" "sleep_mode.c" "autopid.c" "expression_parser.c" "wc_mdns.c" "wc_timer.c" "dev_status.c" "ota_health.c" "gen_inhibit.c")
+set(requires   esp_timer esp_wifi nvs_flash fatfs vfs driver esp-tls esp_adc esp_eth log app_update esp_http_server spiffs freertos mqtt json debug_logs)
 idf_component_register(
     SRCS "hw_config.c" "wc_timer.c" "autopid.c" "" "${srcs}"        # list the source files of this component
     INCLUDE_DIRS        # optional, add here public include directories

@@ -70,7 +70,6 @@
 #include "ota_health.h"
 #include "gen_inhibit.h"
 #include "can.h"
-#include "ble.h"
 #include "sleep_mode.h"
 #include "autopid.h"
 #include "wc_mdns.h"
@@ -1023,10 +1022,6 @@ static esp_err_t upload_post_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    if(config_server_get_ble_config())
-    {
-    	ble_disable();
-    }
     can_disable();
     /* Skip leading "/upload" from URI to get filename */
     /* Note sizeof() counts NULL termination hence the -1 */

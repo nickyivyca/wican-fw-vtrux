@@ -32,7 +32,6 @@
  #include <string.h>
  #include "lwip/sockets.h"
  #include "config_server.h"
- #include "ble.h"
  #include "dev_status.h"
  #include "ota_health.h"
  
@@ -136,11 +135,6 @@
          wifi_event_ap_staconnected_t* event = (wifi_event_ap_staconnected_t*) event_data;
          ESP_LOGI(WIFI_TAG, "station "MACSTR" join, AID=%d",
                   MAC2STR(event->mac), event->aid);
-         if(config_server_get_ble_config())
-         {
-             ble_disable();
-             ESP_LOGW(WIFI_TAG, "disable ble");
-         }
      }
      else if (event_id == WIFI_EVENT_AP_STADISCONNECTED)
      {
@@ -148,11 +142,6 @@
          wifi_event_ap_stadisconnected_t* event = (wifi_event_ap_stadisconnected_t*) event_data;
          ESP_LOGI(WIFI_TAG, "station "MACSTR" leave, AID=%d",
                   MAC2STR(event->mac), event->aid);
-         if(config_server_get_ble_config())
-         {
-             ble_enable();
-             ESP_LOGW(WIFI_TAG, "enable ble");
-         }
      }
      else if(event_id == WIFI_EVENT_AP_START)
      {

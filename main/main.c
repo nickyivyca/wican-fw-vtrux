@@ -38,7 +38,6 @@
 #include "config_server.h"
 #include "slcan.h"
 #include "can.h"
-#include "ble.h"
 #include "wifi_network.h"
 #include "esp_mac.h"
 #include "esp_ota_ops.h"
@@ -64,7 +63,7 @@
 #define BLE_EN_PIN_SEL		(1ULL<<BLE_EN_PIN_NUM)
 #define BLE_Enabled()		(!gpio_get_level(BLE_EN_PIN_NUM))
 
-static QueueHandle_t xMsg_Tx_Queue, xMsg_Rx_Queue, xmsg_ws_tx_queue, xmsg_ble_tx_queue, xmsg_uart_tx_queue, xmsg_obd_rx_queue, xmsg_mqtt_rx_queue;
+static QueueHandle_t xMsg_Tx_Queue, xMsg_Rx_Queue, xmsg_ws_tx_queue, xmsg_uart_tx_queue, xmsg_obd_rx_queue, xmsg_mqtt_rx_queue;
 static xdev_buffer ucTCP_RX_Buffer;
 static xdev_buffer ucTCP_TX_Buffer;
 
@@ -193,10 +192,6 @@ static void can_tx_task(void *pvParameters)
 			{
 				slcan_parse_str(msg_ptr, temp_len, &tx_msg, &xMsg_Tx_Queue);
 			}
-			else if(ucTCP_RX_Buffer.dev_channel == DEV_BLE)
-			{
-				slcan_parse_str(msg_ptr, temp_len, &tx_msg, &xmsg_ble_tx_queue);
-			}
 			else if(ucTCP_RX_Buffer.dev_channel == DEV_UART)
 			{
 				if(!config_server_mqtt_en_config())
@@ -210,10 +205,6 @@ static void can_tx_task(void *pvParameters)
 			if(ucTCP_RX_Buffer.dev_channel == DEV_WIFI)
 			{
 				elm327_process_cmd(msg_ptr, temp_len, &tx_msg, &xMsg_Tx_Queue);
-			}
-			else if(ucTCP_RX_Buffer.dev_channel == DEV_BLE)
-			{
-				elm327_process_cmd(msg_ptr, temp_len, &tx_msg, &xmsg_ble_tx_queue);
 			}
 		}
 	}
@@ -278,7 +269,7 @@ static void can_rx_task(void *pvParameters)
 				}
         	}
         	//TODO: optimize, useless ifs
-			if(tcp_port_open() || ble_connected() || project_hardware_rev == WICAN_USB_V100 || mqtt_connected() || protocol == AUTO_PID )
+			if(tcp_port_open() || project_hardware_rev == WICAN_USB_V100 || mqtt_connected() || protocol == AUTO_PID )
 			{
 				memset(ucTCP_TX_Buffer.ucElement, 0, sizeof(ucTCP_TX_Buffer.ucElement));
 				ucTCP_TX_Buffer.usLen = 0;
@@ -302,11 +293,7 @@ static void can_rx_task(void *pvParameters)
 					{
 						xQueueSend( xMsg_Tx_Queue, ( void * ) &ucTCP_TX_Buffer, pdMS_TO_TICKS(0) );
 					}
-					if(ble_connected())
-					{
-						xQueueSend( xmsg_ble_tx_queue, ( void * ) &ucTCP_TX_Buffer, pdMS_TO_TICKS(0) );
-					}
-					else if(project_hardware_rev == WICAN_USB_V100)
+					if(project_hardware_rev == WICAN_USB_V100)
 					{
 						if(!config_server_mqtt_en_config())
 						{
@@ -501,12 +488,6 @@ void app_main(void)
 		}
 	}
 	
-    if(config_server_get_ble_config())
-    {
-    	int pass = config_server_ble_pass();
-    	xmsg_ble_tx_queue = xQueueCreate(100, sizeof( xdev_buffer) );
-    	ble_init(&xmsg_ble_tx_queue, &xMsg_Rx_Queue, CONNECTED_LED_GPIO_NUM, pass, &ble_uid[0]);
-    }
 
 
 
