@@ -72,8 +72,16 @@ _Static_assert(GEN_INHIBIT_PROBE_ID == GI_PROBE_ID, "id drift");
 #define GEN_INHIBIT_AUTOARM_OFFSET_US   500
 #endif
 
+/* Bump per meaningful firmware rev and add a row to the table in
+ * projects/vtrux/notes/artifacts/gen-inhibit/wican_diag_schema.md.
+ *
+ * 2 is the first build in which a latched section 6 release clears
+ * inhibit_live, which is visible on the wire as diag_flags byte3 0x27 -> 0x07.
+ * A bench log that cannot tell rev 1 from rev 2 cannot tell whether it is
+ * looking at the bug or the fix, and diag_git_hash alone puts that behind a
+ * lookup. */
 #ifndef DIAG_FW_VERSION
-#define DIAG_FW_VERSION              1
+#define DIAG_FW_VERSION              2
 #endif
 #ifndef GIT_SHA
 #define GIT_SHA "unknown"
