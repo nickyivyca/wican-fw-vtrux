@@ -1,0 +1,113 @@
+# gen_inhibit host harness
+
+Runs `main/gen_inhibit_core.c` — the same file the ESP32 runs — on a PC, with
+no hardware, and diffs its behaviour against recorded goldens.
+
+Written 2026-09-19, when the decision logic was split out of `gen_inhibit.c`
+into a pure core plus a driver shim.
+
+## Read this before trusting a green run
+
+**This is a regression harness, not a differential one.** It compiles the same
+core the target runs, so green means *behaviour has not changed since the
+goldens were blessed*. It cannot catch a rule that is wrong here and wrong in
+the golden too.
+
+That trade was made deliberately with the user on 2026-09-19. The alternative
+— maintaining an independent Python reference and diffing two implementations,
+the way `projects/vtrux/tools/interposer/firmware/test/host_diff/` does with
+`machine.py` against `machine.cpp` — was considered and declined. We have no
+1:1 reference for this logic: `tools/gen_inhibit/inhibit.py` is proactive and
+scheduled where this is a reactive trail, so it is related, not an oracle.
+
+Why it is still worth having: every bug found in this component so far has
+been a **state-sequence** bug, reachable only from a particular order of
+received frames and invisible to a compiler. That is exactly what a replay
+catches. Three were found by hand on 2026-09-19; two more were found by this
+harness on its first run (see *Findings*).
+
+**`--bless` is not a way to make a failing test pass.** Read the diff, decide
+whether the change is intended, and check it against what the scenario's own
+header says it is meant to demonstrate. A wrong rule blessed into a golden
+stays green forever.
+
+**A green run does not clear a spec §13 item.** Those clear on bench proof.
+
+## Layout
+
+| File | What it is |
+|---|---|
+| `host_runner.c` | Emulates the worker loop, replays a scenario, prints a deterministic trace |
+| `extract_probe.c` | Exposes the core's four hand-rolled extractors for the cantools cross-check |
+| `Makefile` | `make` builds both; `make asan` rebuilds under ASan/UBSan |
+| `make_scenarios.py` | Generates the synthetic scenarios into `scenarios/` |
+| `from_capture.py` | Turns a real capture into a scenario; `--scan` finds key-on points |
+| `run_tests.py` | Builds, replays every scenario, diffs against `golden/` |
+| `test_signals.py` | 2000 randomised frames per signal, C extractors vs cantools |
+| `scenarios/` | Generated inputs. Not hand-edited |
+| `golden/` | Blessed traces |
+
+## Running it
+
+```sh
+make
+python3 make_scenarios.py      # writes scenarios/
+python3 run_tests.py           # build, replay, diff
+python3 run_tests.py --only keyon
+python3 run_tests.py --bless   # after reading the diff
+python3 test_signals.py        # needs cantools and the project repo
+```
+
+`test_signals.py` and `from_capture.py` reach into the **project** repo
+(`reverse-it`), which is a separate tree — for the DBCs and for `canre`'s
+parsers. Point them at it with `--repo` or `$GEN_INHIBIT_REPO`; the default is
+the `madhouse-debian` layout, `~/Seafile/NotGit/reverse-it`.
+
+Prefer running all of this on `madhouse-debian`: the log corpus is on local
+disk there, so no SeaDrive hydration is involved, and it keeps the load off
+whichever machine is driving the bench.
+
+## What is emulated, and what is therefore untested
+
+`host_runner` reproduces the worker loop closely enough for frame ordering and
+for the interaction between the periodic tick and frame arrival — which is
+where the bugs live. It does **not** emulate:
+
+- the TWAI driver, `can_enable()`/`can_disable()`, or the listen-only forcing
+  for OBSERVE. Those are in the shim and are hardware-only;
+- **latency**. Every transmit is instantaneous, so the response histogram is
+  all zeros. Timing is what the bench ESP-to-ESP test measures; a host replay
+  cannot speak to it;
+- preemption, and the races between the worker task and the HTTP handlers.
+
+## Findings
+
+Both were produced by this harness on its first run. Both are **pre-refactor
+behaviour, faithfully preserved** — neither is damage from the core split —
+and both are recorded as goldens rather than fixed, because the spec is the
+source of truth and a behaviour change belongs there first.
+
+**1. The arm gate's "generator already running" check is arrival-order
+dependent.** `arm-gate-order-rpm-first` and `arm-gate-order-cmd-first` differ
+by one microsecond in whether 0x051 or 0x054 lands first. Rpm-first blocks
+correctly and never transmits. Cmd-first finds `have_rpm` still false, skips
+the check, goes live, and transmits ~16 zero-torque frames at a generator
+turning 800 rpm before the 0.3 s runtime debounce ends the run. The check
+exists because "taking over a loaded generator and commanding zero sheds the
+engine's whole load in one frame".
+
+**2. A latched section 6 disable freezes `inhibit_live` at true.**
+`disable-freezes-live-flag`. Transmission stops correctly, but the interlock
+block is guarded by `mode == INHIBIT && !disabled`, so once disabled nothing
+clears the flag and the worker never reaches its OFF branch. `diag_flags` bit5
+and the JSON then claim a live inhibit on a device that is latched off. Same
+defect class as the disarm bug fixed by hand earlier the same day.
+
+## Real-capture replays
+
+`replay-T20-drive` is 200 s and 84,727 frames from
+`vtrux_20260617_193900_T20.log`, with all six relevant IDs present. The device
+transmits **nothing** across the whole capture: blocked on "generator running"
+from 2 ms in, then latched off at 228 ms on SoC 20.11 %, which is the
+charge-sustain band §6.2 describes. 19,996 of 19,996 rolling-counter steps
+were exactly +1 in real data.

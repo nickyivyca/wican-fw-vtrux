@@ -1,0 +1,30 @@
+# host_runner: 420 frames, 1 directives, t=[0,9000000]
+0 STATE mode=0 live=0 block=not armed abort= disabled=0 dcode= susp=0 fb_ever=0
+0 EV MODE a=3 b=500 c=0
+0 STATE mode=3 live=0 block=gate not yet evaluated abort= disabled=0 dcode= susp=0 fb_ever=0
+0 TX DIAG id=7F1 dlc=8 data=0201030600FF0000 ok=1
+0 STATE mode=3 live=0 block=no fresh 0x051 abort= disabled=0 dcode= susp=0 fb_ever=0
+400000 TX DIAG id=7F2 dlc=8 data=0000000000000000 ok=1
+800000 TX DIAG id=7F3 dlc=8 data=0000000001000200 ok=1
+1000000 EV INHIBIT_LIVE a=0 b=0 c=0
+1000000 STATE mode=3 live=1 block= abort= disabled=0 dcode= susp=0 fb_ever=0
+1020000 TX INHIBIT id=051 dlc=6 data=080080FF7F02 ok=1
+1040000 TX INHIBIT id=051 dlc=6 data=080080FF7F03 ok=1
+1060000 TX INHIBIT id=051 dlc=6 data=080080FF7F04 ok=1
+1080000 TX INHIBIT id=051 dlc=6 data=080080FF7F05 ok=1
+1100000 TX INHIBIT id=051 dlc=6 data=080080FF7F06 ok=1
+1100000 TX DIAG id=7F1 dlc=8 data=0201032600FF0000 ok=1
+1120000 TX INHIBIT id=051 dlc=6 data=080080FF7F07 ok=1
+1140000 TX INHIBIT id=051 dlc=6 data=080080FF7F08 ok=1
+1160000 TX INHIBIT id=051 dlc=6 data=080080FF7F09 ok=1
+1180000 TX INHIBIT id=051 dlc=6 data=080080FF7F0A ok=1
+1200000 TX INHIBIT id=051 dlc=6 data=080080FF7F0B ok=1
+1220000 TX INHIBIT id=051 dlc=6 data=080080FF7F0C ok=1
+1240000 TX INHIBIT id=051 dlc=6 data=080080FF7F0D ok=1
+1260000 TX INHIBIT id=051 dlc=6 data=080080FF7F0E ok=1
+1280000 TX INHIBIT id=051 dlc=6 data=080080FF7F0F ok=1
+1300000 TX INHIBIT id=051 dlc=6 data=080080FF7F00 ok=1
+1320000 TX INHIBIT id=051 dlc=6 data=080080FF7F01 ok=1
+1320000 EV ABORT a=5 b=0 c=0
+1320000 STATE mode=0 live=0 block= abort=engine turning while armed -- the inhibit did not hold disabled=0 dcode= susp=0 fb_ever=0
+9040000 FINAL mode=0 live=0 tx_ok=16 tx_fail=0 other=4 ctr_ok=17 ctr_bad=0 rx_gap_n=17 resp_n=16 disabled=0 dcode= block= abort=engine turning while armed -- the inhibit did not hold soc=0 shift=255
