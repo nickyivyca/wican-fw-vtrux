@@ -1,0 +1,11 @@
+# host_runner: 24809 frames, 1 directives, t=[0,65000000]
+0 STATE mode=0 live=0 block=not armed abort= disabled=0 dcode= susp=0 fb_ever=0
+0 EV MODE a=3 b=500 c=0
+0 STATE mode=3 live=0 block=gate not yet evaluated abort= disabled=0 dcode= susp=0 fb_ever=0
+0 STATE mode=3 live=0 block=no fresh 0x051 abort= disabled=0 dcode= susp=0 fb_ever=0
+6000 EV INHIBIT_LIVE a=0 b=0 c=0
+6000 STATE mode=3 live=1 block= abort= disabled=0 dcode= susp=0 fb_ever=0
+9103900 STATE mode=3 live=1 block= abort= disabled=0 dcode= susp=0 fb_ever=1
+39057000 EV DISABLED a=1 b=0 c=0
+39057000 STATE mode=3 live=0 block=latched disable abort= disabled=1 dcode=m_mode susp=0 fb_ever=1
+65199000 FINAL mode=3 live=0 tx_ok=3905 tx_fail=0 other=18409 ctr_ok=6399 ctr_bad=0 rx_gap_n=6399 resp_n=3905 disabled=1 dcode=m_mode block=latched disable abort= soc=5485 shift=4

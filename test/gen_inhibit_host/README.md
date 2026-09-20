@@ -111,11 +111,56 @@ clears the flag and the worker never reaches its OFF branch. `diag_flags` bit5
 and the JSON then claim a live inhibit on a device that is latched off. Same
 defect class as the disarm bug fixed by hand earlier the same day.
 
+## Regenerating the real-capture replays
+
+`scenarios/` is gitignored — the replays are 25k–127k lines each. The goldens
+are committed (summary only; TX lines are filtered, since `FINAL` already
+carries `tx_ok`/`tx_fail`/`ctr_ok`/`ctr_bad`). To rebuild the inputs:
+
+```sh
+L=~/Seafile/CANLogs/VtruxLogs
+python3 from_capture.py $L/vtrux_20260617_193900_T20.log --at 0.009 --for 200 \
+        --out scenarios/replay-T20-drive.scn
+python3 from_capture.py $L/vtrux_20260323_220148_T0.log  --at 0 --for 300 \
+        --out scenarios/replay-healthy-engine-off.scn
+python3 from_capture.py $L/vtrux_20260322_165622_T1.log  --at 0 --for 64 \
+        --out scenarios/replay-mmode-genstart.scn
+```
+
+`--scan` finds key-on candidates in a capture you want to add.
+
 ## Real-capture replays
 
-`replay-T20-drive` is 200 s and 84,727 frames from
-`vtrux_20260617_193900_T20.log`, with all six relevant IDs present. The device
-transmits **nothing** across the whole capture: blocked on "generator running"
-from 2 ms in, then latched off at 228 ms on SoC 20.11 %, which is the
-charge-sustain band §6.2 describes. 19,996 of 19,996 rolling-counter steps
-were exactly +1 in real data.
+Three captures, three different correct outcomes.
+
+**`replay-T20-drive`** — 200 s, 84,727 frames, generator running at SoC
+20.11 %. Transmits **nothing**: blocked on "generator running" from 2 ms in,
+then latched off at 228 ms on SoC, which is the charge-sustain band §6.2
+describes.
+
+**`replay-healthy-engine-off`** — 300 s, 127,082 frames, engine off at SoC
+84.6 %. Live at 7 ms, **held the whole capture**, 29,990 transmits, zero
+aborts. This is the one that says the §7 trip set is not hair-triggered
+against real traffic.
+
+**`replay-mmode-genstart`** — 64 s, 24,809 frames, and the most complete
+end-to-end story in the corpus. The driver engages M mode and the generator
+actually starts:
+
+| t | event | device |
+|---|---|---|
+| 0.006 s | engine off, SoC 43.3 % | goes live |
+| 0.006–39.057 s | normal driving, shifter P/R/N/D | 3,905 transmits |
+| **39.057 s** | `shift_lever_pos` -> 4 (**M mode**) | latches `m_mode`, `inhibit_live` clears, transmission stops |
+| 46.4 s | **generator cranks and runs** | silent |
+| 53.2 s | M mode released | latch **holds** |
+| 54.4 s | engine coasts down | silent |
+
+**Zero transmits after the latch** — last at 39.054 s, latch at 39.057 s.
+This exercises §6.1's entire purpose against a real event rather than a
+synthetic one: the driver demanded the generator, the inhibitor stood down,
+and the generator started. SoC rises 43.3 % -> 54.9 % across the capture,
+which is the generator doing its job with the inhibitor out of the way.
+
+Across all three, the rolling counter stepped exactly +1 on **56,385 of
+56,385** transitions.
