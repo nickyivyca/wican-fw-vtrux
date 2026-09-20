@@ -264,6 +264,7 @@ typedef enum
     GI_BLOCK_VCM_REQ_ENGINE,
     GI_BLOCK_VCM_TORQUE,
     GI_BLOCK_SHUTDOWN_CMD,
+    GI_BLOCK_DISABLED,          /* a section 6 release has latched */
 } gi_block_t;
 
 typedef enum

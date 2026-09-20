@@ -102,6 +102,7 @@ const char *gi_block_name(gi_block_t b)
     case GI_BLOCK_VCM_REQ_ENGINE:      return "VCM requesting engine";
     case GI_BLOCK_VCM_TORQUE:          return "VCM commanding torque";
     case GI_BLOCK_SHUTDOWN_CMD:        return "VCM commanding 0x10";
+    case GI_BLOCK_DISABLED:            return "latched disable";
     }
     return "?";
 }
@@ -675,7 +676,20 @@ void gi_tick(gi_state_t *st, int64_t now, const gi_bus_t *bus,
      * handled by arm_gate_ok(); absence AFTER going live is "the link we were
      * using has dropped". Do not merge these paths.
      */
-    if (st->mode == GI_INHIBIT && !st->disabled)
+    if (st->mode == GI_INHIBIT && st->disabled)
+    {
+        /*
+         * Latched off. latch_disable() already cleared the live flag at the
+         * instant of the latch; this covers the other route to the same
+         * state -- re-arming while a release is still latched, where
+         * gi_reset_stats() would otherwise leave arm_block reading
+         * "gate not yet evaluated" and hide the reason the gate will never
+         * run. Belt and braces on the flag too, since it is load-bearing.
+         */
+        st->inhibit_live = false;
+        st->arm_block = GI_BLOCK_DISABLED;
+    }
+    else if (st->mode == GI_INHIBIT)
     {
         if (st->inhibit_live)
         {
@@ -706,6 +720,37 @@ void gi_tick(gi_state_t *st, int64_t now, const gi_bus_t *bus,
  *              DBC).
  *   Low SoC -- pack needs the generator to charge (0x411 BMS_SoC_HiRes).
  */
+/*
+ * Latch a section 6 release.
+ *
+ * Spec 6.4 (2026-09-19): a latched release is a STAND-DOWN, so the section 7
+ * live flag clears with it. This is not cosmetic. `inhibit_live` is one of the
+ * terms that authorises a transmit in gi_on_frame(), so leaving it set means a
+ * control flag reads "authorised" while transmission is forbidden, and the
+ * only thing preventing a transmit is the `!disabled` term sitting beside it
+ * in the same && chain. That is a one-term margin that depends on the order of
+ * a boolean expression, and it is exactly the kind of thing a later edit
+ * breaks silently.
+ *
+ * Cleared here, at the instant of the latch, rather than on the next tick, so
+ * that the dispatch later in this same gi_on_frame() call already sees it
+ * false and does not rely on `!disabled` at all.
+ *
+ * Found by the host suite. The pre-refactor code left the flag frozen true for
+ * the rest of the run, because the whole interlock block is guarded by
+ * `mode == INHIBIT && !disabled` and the worker never reaches its OFF branch
+ * while the mode is still INHIBIT.
+ */
+static void latch_disable(gi_state_t *st, gi_disable_t why, int32_t detail,
+                          int64_t now, gi_events_t *ev)
+{
+    st->disabled = true;
+    st->disable_code = why;
+    st->inhibit_live = false;
+    st->arm_block = GI_BLOCK_DISABLED;
+    ev_add(ev, now, GI_EV_DISABLED, (int32_t)why, detail, 0);
+}
+
 static void disable_monitor(gi_state_t *st, uint32_t id, uint8_t dlc,
                             const uint8_t *data, int64_t now, gi_events_t *ev)
 {
@@ -720,9 +765,7 @@ static void disable_monitor(gi_state_t *st, uint32_t id, uint8_t dlc,
         st->last_shift_pos = pos;
         if (pos == GI_MMODE_VALUE)
         {
-            st->disabled = true;
-            st->disable_code = GI_DISABLE_M_MODE;
-            ev_add(ev, now, GI_EV_DISABLED, (int32_t)GI_DISABLE_M_MODE, 0, 0);
+            latch_disable(st, GI_DISABLE_M_MODE, 0, now, ev);
         }
     }
     else if (id == GI_SOC_ID && dlc >= 2)
@@ -740,10 +783,8 @@ static void disable_monitor(gi_state_t *st, uint32_t id, uint8_t dlc,
             {
                 if (++st->soc_low_count >= st->cfg.soc_debounce)
                 {
-                    st->disabled = true;
-                    st->disable_code = GI_DISABLE_LOW_SOC;
-                    ev_add(ev, now, GI_EV_DISABLED,
-                           (int32_t)GI_DISABLE_LOW_SOC, (int32_t)raw, 0);
+                    latch_disable(st, GI_DISABLE_LOW_SOC, (int32_t)raw,
+                                  now, ev);
                 }
             }
             else

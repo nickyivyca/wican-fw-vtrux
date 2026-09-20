@@ -96,6 +96,14 @@ turning 800 rpm before the 0.3 s runtime debounce ends the run. The check
 exists because "taking over a loaded generator and commanding zero sheds the
 engine's whole load in one frame".
 
+**Severity is lower than that reads, measured after the fact.** In 21,925 real
+frames with the generator at >=300 rpm, `gen_rpm_ref` was never the engine-off
+null and torque was never zero — so the gate's two `0x051`-based checks, which
+can never be skipped, already cover the loaded case. The synthesised
+combination occurs 8 times in 39,718 co-observed frames across 150 logs, over
+a 73 ms engine coast-down where the VCM has already commanded zero, and going
+live there is correct. Real gap, no observed hazard.
+
 **2. A latched section 6 disable freezes `inhibit_live` at true.**
 `disable-freezes-live-flag`. Transmission stops correctly, but the interlock
 block is guarded by `mode == INHIBIT && !disabled`, so once disabled nothing

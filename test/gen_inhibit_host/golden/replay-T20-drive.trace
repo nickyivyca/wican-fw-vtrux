@@ -7,5 +7,5 @@
 2000 STATE mode=3 live=0 block=generator running abort= disabled=0 dcode= susp=0 fb_ever=0
 7000 STATE mode=3 live=0 block=generator running abort= disabled=0 dcode= susp=0 fb_ever=1
 228000 EV DISABLED a=2 b=2011 c=0
-228000 STATE mode=3 live=0 block=generator running abort= disabled=1 dcode=low_soc susp=0 fb_ever=1
-201199900 FINAL mode=3 live=0 tx_ok=0 tx_fail=0 other=64730 ctr_ok=19996 ctr_bad=0 rx_gap_n=19996 resp_n=0 disabled=1 dcode=low_soc block=generator running abort= soc=2011 shift=3
+228000 STATE mode=3 live=0 block=latched disable abort= disabled=1 dcode=low_soc susp=0 fb_ever=1
+201199900 FINAL mode=3 live=0 tx_ok=0 tx_fail=0 other=64730 ctr_ok=19996 ctr_bad=0 rx_gap_n=19996 resp_n=0 disabled=1 dcode=low_soc block=latched disable abort= soc=2011 shift=3

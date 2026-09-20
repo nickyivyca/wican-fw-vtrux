@@ -384,11 +384,22 @@ This is pre-refactor behaviour, faithfully preserved -- it is NOT a
 regression introduced by the core split. It is recorded here as a golden so
 that the behaviour is visible and any change to it shows up as a diff.
 
-WHY IT MATTERS: the arm gate's stated purpose for this check is that "taking
-over a loaded generator and commanding zero sheds the engine's whole load in
-one frame -- a load dump on a running engine". Whether that protection holds
-currently depends on which of two frames arrives first. Raised with the user;
-the fix belongs in the spec before it belongs in the code.
+WHY IT MATTERS, and how much -- measured 2026-09-19, AFTER this scenario was
+written, and the answer is "less than this scenario implies":
+
+  * Across 21,925 real frames with the generator at >=300 rpm, gen_rpm_ref was
+    never the engine-off null and torque was never zero. A loaded running
+    generator always coincides with the VCM commanding it, and the gate's
+    vcm_rpm_ref/vcm_torque checks read 0x051, which is always fresh when the
+    gate runs. The load-dump case is independently covered.
+  * The combination this scenario synthesises occurs 8 times in 39,718
+    co-observed frames across 150 logs, spanning 73 ms, and it is an engine
+    coasting down after the VCM already commanded it off -- unloaded, so
+    commanding zero there is harmless and going live is correct.
+
+Keep the scenario: the skipped-check path is real and this pins it. But do not
+read it as a vehicle hazard. Raised with the user; a fix belongs in the spec
+before the code.
 """)
 def s_gate_order_cmd_first():
     L = ["mode 0 3 500"]
@@ -398,32 +409,52 @@ def s_gate_order_cmd_first():
     return sorted_directives(L)
 
 
-@scenario("disable-freezes-live-flag", """
-FINDING (2026-09-19, found by this harness). A latched section 6 disable
-(here M mode) arrives while the inhibit is live.
+@scenario("disable-clears-live-flag", """
+A latched section 6 disable (here M mode) arrives while the inhibit is live.
 
-CURRENTLY OBSERVED: transmission stops immediately, correctly. But
-inhibit_live stays 1 for the rest of the run, because the whole interlock
-block is guarded by `mode == INHIBIT && !disabled`, so once disabled neither
-the runtime trips nor the arm gate run again, and nothing clears the flag.
-The worker never reaches its OFF branch either, since the mode is still
-INHIBIT.
+EXPECT: transmission stops, inhibit_live goes false, and arm_block reads
+"latched disable". Spec 6.4, added 2026-09-19.
 
-Consequence: diag_flags bit5 and the JSON "inhibit_live" report a live
-inhibit on a device that is latched off and transmitting nothing.
+It then DISARMS and RE-ARMS while still latched, which is the second route
+into the same state and the one m-mode-latch does not cover: the arm-cycle
+reset sets arm_block to "gate not yet evaluated", and without the guard in
+gi_tick that would hide the reason the gate is never going to run. Expect
+arm_block back to "latched disable", inhibit_live still false, and still no
+transmission.
 
-This is the SAME defect class as the bug fixed on 2026-09-19 where
-inhibit_live survived an ordinary disarm -- "exactly the kind of
-reassuring-but-wrong reading these flags exist to prevent". Pre-refactor
-behaviour, preserved deliberately; raised with the user rather than fixed
-here, because the spec is the source of truth for what the flag means.
+READING THE FINAL LINE: tx_ok is 0 and the frame counts look far too low for
+the scenario length. That is correct, not a bug. Arming calls the arm-cycle
+reset, so the re-arm at 6 s zeroes tx_ok, other_frames, ctr_steps and the
+histograms -- FINAL therefore describes only the post-6 s window, in which
+the device is latched off and rightly transmits nothing. The ~100 frames
+transmitted between going live at 1 s and the latch at 3 s are real; they
+are simply no longer counted. The EV and STATE lines above are the record of
+that earlier activity.
+
+HISTORY, because this scenario exists to pin a fix rather than a feature.
+As found by this harness, inhibit_live stayed 1 for the rest of the run: the
+whole interlock block is guarded by `mode == INHIBIT && !disabled`, so once
+disabled neither the runtime trips nor the arm gate ran again and nothing
+cleared the flag, and the worker never reached its OFF branch because the
+mode was still INHIBIT.
+
+Why that mattered enough to change the spec: inhibit_live is NOT just
+telemetry. It is one of the terms authorising a transmit in gi_on_frame(),
+so a frozen-true flag meant a control flag reading "authorised" while
+transmission was forbidden, with only the `!disabled` term beside it in the
+same && chain preventing a transmit. A one-term margin that depends on the
+order of a boolean expression. The fix clears the flag at the instant of the
+latch, so the dispatch does not rely on `!disabled` at all.
 """)
 def s_disable_freezes_live():
     L = ["mode 0 3 500"]
-    L += cmd_train(1 * S, 6 * S, 20 * MS)
+    L += cmd_train(1 * S, 9 * S, 20 * MS)
     L += periodic(1 * S, 3 * S, 200 * MS, lambda t: shift(t, 2))
-    L += periodic(3 * S, 6 * S, 200 * MS, lambda t: shift(t, 4))
-    L += ["end %d" % (7 * S)]
+    L += periodic(3 * S, 9 * S, 200 * MS, lambda t: shift(t, 4))
+    # Disarm and re-arm while the disable is still latched.
+    L += ["mode %d 0 500" % (5 * S)]
+    L += ["mode %d 3 500" % (6 * S)]
+    L += ["end %d" % (10 * S)]
     return sorted_directives(L)
 
 
