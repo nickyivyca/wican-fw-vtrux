@@ -117,14 +117,16 @@ defect class as the disarm bug fixed by hand earlier the same day.
 are committed (summary only; TX lines are filtered, since `FINAL` already
 carries `tx_ok`/`tx_fail`/`ctr_ok`/`ctr_bad`). To rebuild the inputs:
 
-All five captures were promoted into the project repo on 2026-09-19 so this
-suite has one stable source instead of reaching into the Android auto-capture
-store. They are described in `projects/vtrux/logs/README.md` there.
+All five captures are copied into the project repo so this suite has one
+stable source instead of reaching into the Android auto-capture store. They
+are described in `projects/vtrux/logs/README.md` there. The copy is not
+ceremony: the original `replay-T20-drive` fixture broke precisely because its
+source moved out from under the suite.
 
 ```sh
 L=~/Seafile/NotGit/reverse-it/projects/vtrux/logs
-python3 from_capture.py $L/vtrux_20260617_193900_T20.log --at 0.009 --for 200 \
-        --out scenarios/replay-T20-drive.scn
+python3 from_capture.py $L/vtrux_20260719_190019_T4.log  --at 0 --for 220 \
+        --out scenarios/replay-genrun-stop.scn
 python3 from_capture.py $L/vtrux_20260323_220148_T0.log  --at 0 --for 300 \
         --out scenarios/replay-healthy-engine-off.scn
 python3 from_capture.py $L/vtrux_20260322_165622_T1.log  --at 0 --for 64 \
@@ -135,18 +137,47 @@ python3 from_capture.py $L/vtrux_20260802_123318_T0.log  --at 0 --for 297 \
         --out scenarios/replay-bus-sleeps.scn
 ```
 
-`--scan` finds key-on candidates in a capture you want to add;
-`projects/vtrux/notes/artifacts/gen-inhibit/shutdown_and_wake_scan.py` is the
-corpus-wide selector that found the last two.
+`--scan` finds key-on candidates in a capture you want to add. Two
+corpus-wide selectors live in
+`projects/vtrux/notes/artifacts/gen-inhibit/`: `shutdown_and_wake_scan.py`
+found `replay-shutdown-at-keyon` and `replay-bus-sleeps`, and
+`replay_candidate_scan.py` found `replay-genrun-stop`.
+
+**Check a candidate's provenance before you adopt it.** A capture recorded
+with test equipment inline on the bus looks exactly like an ordinary drive,
+and one such capture was in this suite for a day before it was caught. The
+known rig dates are listed in the repo's `data-sources.md`.
 
 ## Real-capture replays
 
-Three captures, three different correct outcomes.
+Five captures, five different correct outcomes.
 
-**`replay-T20-drive`** — 200 s, 84,727 frames, generator running at SoC
-20.11 %. Transmits **nothing**: blocked on "generator running" from 2 ms in,
-then latched off at 228 ms on SoC, which is the charge-sustain band §6.2
-describes.
+**`replay-genrun-stop`** — 220 s, 93,150 frames, SoC 77.2 %, and the only
+replay that shows the arm gate both holding and releasing:
+
+| t | event | device |
+|---|---|---|
+| 0.007 s | generator already turning at 735 rpm | blocked, `generator running` |
+| 0.007–92.058 s | generator runs, 1,676 rpm peak | **transmits nothing** |
+| **92.058 s** | generator stops | goes live in the same tick |
+| 92.058–220.476 s | engine off, SoC 77 % | 12,779 transmits, 0 failures |
+| 220.476 s | capture ends | bus-loss abort on the trailing silence |
+
+21,982 counter steals, `ctr_bad=0`. This is the fixture that says the gate is
+not one-way: it holds the device off for 92 s of real generator operation and
+then arms itself on the real stop, with no synthetic directive anywhere in
+the trace but the initial mode set.
+
+**It replaces `replay-T20-drive`, removed 2026-09-20.** That fixture's source
+was `vtrux_20260617_193900_T20`, from the session where the `generator_runner`
+laptop bridge was inline on the bus; the user ruled those captures out as test
+data. Its role was *generator running plus SoC below the 21 % floor*, and
+**that combination does not exist anywhere else in the corpus** — all 26
+captures with both properties are from the 2026-06-17/18 rig window
+(`projects/vtrux/notes/artifacts/gen-inhibit/replay_candidate_scan.py`). So
+the replacement keeps the generator-running block against real traffic and
+gives up the low-SoC latch, which `low-soc-debounce` already asserts
+synthetically. The low-SoC latch is no longer exercised against real traffic.
 
 **`replay-healthy-engine-off`** — 300 s, 127,082 frames, engine off at SoC
 84.6 %. Live at 7 ms, **held the whole capture**, 29,990 transmits, zero
@@ -172,5 +203,5 @@ synthetic one: the driver demanded the generator, the inhibitor stood down,
 and the generator started. SoC rises 43.3 % -> 54.9 % across the capture,
 which is the generator doing its job with the inhibitor out of the way.
 
-Across all three, the rolling counter stepped exactly +1 on **56,385 of
-56,385** transitions.
+Across the replays the rolling counter stepped exactly +1 on every
+transition: `ctr_bad=0` in all five goldens.
