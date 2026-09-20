@@ -1,0 +1,15 @@
+# host_runner: 26797 frames, 1 directives, t=[0,298000000]
+0 STATE mode=0 live=0 block=not armed abort= disabled=0 dcode= susp=0 fb_ever=0
+0 EV MODE a=3 b=500 c=0
+0 STATE mode=3 live=0 block=gate not yet evaluated abort= disabled=0 dcode= susp=0 fb_ever=0
+0 STATE mode=3 live=0 block=no fresh 0x051 abort= disabled=0 dcode= susp=0 fb_ever=0
+5900 EV SHUTDOWN_SUPPRESS a=1 b=16 c=0
+5900 STATE mode=3 live=0 block=no fresh 0x051 abort= disabled=0 dcode= susp=1 fb_ever=0
+5900 STATE mode=3 live=0 block=VCM commanding 0x10 abort= disabled=0 dcode= susp=1 fb_ever=0
+10613900 EV SHUTDOWN_SUPPRESS a=0 b=8 c=0
+10613900 STATE mode=3 live=0 block=VCM commanding 0x10 abort= disabled=0 dcode= susp=0 fb_ever=0
+10613900 EV INHIBIT_LIVE a=0 b=0 c=0
+10613900 STATE mode=3 live=1 block= abort= disabled=0 dcode= susp=0 fb_ever=0
+11673000 EV ABORT a=2 b=0 c=0
+11673000 STATE mode=0 live=0 block= abort=0x617 B7 = 0xCA (VCM fault active) disabled=0 dcode= susp=0 fb_ever=0
+298023000 FINAL mode=0 live=0 tx_ok=105 tx_fail=0 other=1233 ctr_ok=1166 ctr_bad=0 rx_gap_n=1166 resp_n=105 disabled=0 dcode= block= abort=0x617 B7 = 0xCA (VCM fault active) soc=9808 shift=0

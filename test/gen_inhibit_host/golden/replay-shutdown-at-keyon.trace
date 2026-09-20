@@ -1,0 +1,16 @@
+# host_runner: 88536 frames, 1 directives, t=[0,226000000]
+0 STATE mode=0 live=0 block=not armed abort= disabled=0 dcode= susp=0 fb_ever=0
+0 EV MODE a=3 b=500 c=0
+0 STATE mode=3 live=0 block=gate not yet evaluated abort= disabled=0 dcode= susp=0 fb_ever=0
+0 STATE mode=3 live=0 block=no fresh 0x051 abort= disabled=0 dcode= susp=0 fb_ever=0
+1000 EV SHUTDOWN_SUPPRESS a=1 b=16 c=0
+1000 STATE mode=3 live=0 block=no fresh 0x051 abort= disabled=0 dcode= susp=1 fb_ever=0
+1000 STATE mode=3 live=0 block=VCM commanding 0x10 abort= disabled=0 dcode= susp=1 fb_ever=0
+16234900 EV SHUTDOWN_SUPPRESS a=0 b=8 c=0
+16234900 STATE mode=3 live=0 block=VCM commanding 0x10 abort= disabled=0 dcode= susp=0 fb_ever=0
+16234900 EV INHIBIT_LIVE a=0 b=0 c=0
+16234900 STATE mode=3 live=1 block= abort= disabled=0 dcode= susp=0 fb_ever=0
+16248000 STATE mode=3 live=1 block= abort= disabled=0 dcode= susp=0 fb_ever=1
+21001900 EV ABORT a=4 b=0 c=0
+21001900 STATE mode=0 live=0 block= abort=0x471 stopped while 0x051 still live -- inverter lost disabled=0 dcode= susp=0 fb_ever=1
+226010000 FINAL mode=0 live=0 tx_ok=477 tx_fail=0 other=3454 ctr_ok=2100 ctr_bad=0 rx_gap_n=2100 resp_n=477 disabled=0 dcode= block= abort=0x471 stopped while 0x051 still live -- inverter lost soc=5108 shift=0

@@ -117,17 +117,27 @@ defect class as the disarm bug fixed by hand earlier the same day.
 are committed (summary only; TX lines are filtered, since `FINAL` already
 carries `tx_ok`/`tx_fail`/`ctr_ok`/`ctr_bad`). To rebuild the inputs:
 
+All five captures were promoted into the project repo on 2026-09-19 so this
+suite has one stable source instead of reaching into the Android auto-capture
+store. They are described in `projects/vtrux/logs/README.md` there.
+
 ```sh
-L=~/Seafile/CANLogs/VtruxLogs
+L=~/Seafile/NotGit/reverse-it/projects/vtrux/logs
 python3 from_capture.py $L/vtrux_20260617_193900_T20.log --at 0.009 --for 200 \
         --out scenarios/replay-T20-drive.scn
 python3 from_capture.py $L/vtrux_20260323_220148_T0.log  --at 0 --for 300 \
         --out scenarios/replay-healthy-engine-off.scn
 python3 from_capture.py $L/vtrux_20260322_165622_T1.log  --at 0 --for 64 \
         --out scenarios/replay-mmode-genstart.scn
+python3 from_capture.py $L/vtrux_20260714_112312_T2.log  --at 0 --for 225 \
+        --out scenarios/replay-shutdown-at-keyon.scn
+python3 from_capture.py $L/vtrux_20260802_123318_T0.log  --at 0 --for 297 \
+        --out scenarios/replay-bus-sleeps.scn
 ```
 
-`--scan` finds key-on candidates in a capture you want to add.
+`--scan` finds key-on candidates in a capture you want to add;
+`projects/vtrux/notes/artifacts/gen-inhibit/shutdown_and_wake_scan.py` is the
+corpus-wide selector that found the last two.
 
 ## Real-capture replays
 
